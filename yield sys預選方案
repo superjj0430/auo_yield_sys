@@ -1,0 +1,153 @@
+
+ 
+ 
+ 
+ 
+  
+  回歸方法
+
+
+  (連續型資料)
+
+
+  
+  
+  •Random Forest, SVR
+
+  •XGB, Light GBM, PLS
+
+  
+  
+  •良率報表分析
+
+  
+ 
+ 
+  
+  關聯規則
+  
+
+
+  (離散型資料)
+
+
+  
+  
+  •Association
+  and correlation rules, 
+
+  •A
+  priori association rules
+
+  •LHS-CHI2
+  algorithm
+
+  •Regression
+  rule learning
+
+  
+  
+  •因果關系
+
+  •關鍵因子分析
+
+  •
+
+  
+ 
+ 
+  
+  無母數檢定
+
+
+  (連續型資料)
+
+
+  
+  
+  
+  •Kruskal–Wallis
+  test 
+
+  •Dunn’s
+  test 
+
+  •Holm–Bonferroni
+  method
+
+  •closed
+  test procedure
+
+  
+  
+  •異常站點偵測
+
+  •機差分析
+
+  •
+
+  
+ 
+ 
+  
+  分類方法
+
+
+  (離散型資料)
+
+
+  
+  
+  •Random
+  Forest, SVM, morphology-based SVM
+  (MSVM) 
+
+  •CNN, ROC, 相似度檢驗
+
+  •MeanDiff
+  technique
+
+  
+  
+  •關鍵因子分析
+
+  •
+
+  
+ 
+ 
+  
+  分群方法
+
+
+  (連續型資料)
+
+
+  
+  
+  
+  •Hybrid
+  clustering algorithm:  Wafer Bin Maps 
+
+  •K-Means++
+  and FPGrowth
+
+  •Mountain
+  method clustering
+
+  
+  
+  •Support
+  Pin Map分析
+
+  
+ 
+6 sigma
+無母數分析 (vs KSS)
+LOF
+Mean Shift演算法分群判斷‘產能等級’與‘機差等級 (vs KSS)
+使用Lasso/Random Forest 演算法計算關鍵站點 (vs KSS)
+XGB分類模型 (vs KSS)
+關聯演算法 (vs KSS)
+Azure Anomaly Detector API(異常偵測器單變數 API)
+
