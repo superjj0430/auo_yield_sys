@@ -1,2 +1,36 @@
-# auo_yield_sys
-https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fl%2Fmeetup-join%2F19%3Ameeting_YmI2YThlMzQtNmFiYi00YjA2LTkxNGYtYWI1NGQzNTJlYTRm%40thread.v2%2F0%3Fcontext%3D%257b%2522Tid%2522%253a%2522251c4747-8930-4ab7-9c8f-ab3c10ad5c13%2522%252c%2522Oid%2522%253a%2522cadbdf2f-82bd-4518-b4fc-ddfc09ec9cf9%2522%257d%26anon%3Dtrue&type=meetup-join&deeplinkId=f2bc7318-a307-443b-93d6-f341ed235b76&directDl=true&msLaunch=true&enableMobilePage=true
+import plotly.graph_objects as go
+import webbrowser
+import numpy as np
+np.random.seed(1)
+
+x = np.random.rand(100)
+y = np.random.rand(100)
+
+f = go.FigureWidget([go.Scatter(x=x, y=y, mode='markers')])
+
+scatter = f.data[0]
+colors = ['#a3a7e4'] * 100
+scatter.marker.color = colors
+scatter.marker.size = [10] * 100
+f.layout.hovermode = 'closest'
+
+
+# create our callback function
+def update_point(trace, points, selector):
+    print('trace: ', trace)
+    print('points: ', points)
+    print('selector: ', selector)
+    c = list(scatter.marker.color)
+    s = list(scatter.marker.size)
+    for i in points.point_inds:
+        c[i] = '#bae2be'
+        s[i] = 20
+        with f.batch_update():
+            webbrowser.open('https://www.google.com.tw/?hl=zh_TW')
+            scatter.marker.color = c
+            scatter.marker.size = s
+
+
+scatter.on_click(update_point)
+
+f
