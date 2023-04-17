@@ -1,0 +1,519 @@
+# for validation
+import os
+import time
+import numpy as np
+import pandas as pd
+import zeep
+import schedule
+import datetime
+import base64
+import matplotlib.pyplot as plt
+import paramiko
+
+def find_indices(lst, condition):
+    return [i for i, elem in enumerate(lst) if condition(elem)]
+    
+def get_basic_data(file_path):
+    timestamp = file_path.split('/')[-1].split('_')[2]
+    product_type = file_path.split('/')[-1].split('_')[3]
+    df = pd.read_csv(file_path, nrows= 7)
+    basic_data_df = pd.DataFrame(columns=[i.split('=')[0] for i in df['_FACTOR'].tolist()], data = [[i.split('=')[-1] for i in df['_FACTOR'].tolist()]])
+    basic_data_df['TIMESTAMP'] = timestamp
+    basic_data_df['PRODUCT_TYPE'] = product_type
+    return basic_data_df
+
+
+def defect_filter():
+    dir_path_list = ['/AOI_DATA/UMAOI100/UPLOAD/NG/', '/AOI_DATA/UMAOI100/UPLOAD/HIS/']
+ 
+    # spec_threshold = {'AB02': ['Tilt', 30],
+    #      'AB03': ['Crack', 10], 
+    #      'AB11': ['PAD Loss', 25],
+    #      'ttp':['ttp', 6, -6]}    
+    
+    spec_threshold = {'AB02': ['Tilt', 40],
+         'AB03': ['Crack', 10], 
+         'AB11': ['PAD Loss', 35],
+         'ttp':['ttp', 6, -6]}    
+
+    defect_record = pd.read_csv('defect_record.csv')
+    column_spec = pd.read_csv('product_type.csv')
+    last_modify_time_df = pd.read_csv('time.csv')
+    last_modify_time = last_modify_time_df['Last_Modify'].max()
+    unprocess   = []
+    unprocess_ttp = []
+    mail_content = {}
+    files_aoi = []
+    files_ttp = []
+    
+    # get new file
+    max_time = [last_modify_time]
+    
+    for dir_path in dir_path_list:
+        for (root, dirs, files) in os.walk(dir_path):
+            files_aoi.append([dir_path + s for s in files if ('AOI_EDC' in s)])
+            files_ttp.append([dir_path + s for s in files if ('TTP_EDC' in s)])
+            break
+
+    files_AOI = []
+    files_TTP = []
+    dup_ck_aoi = {}
+    dup_ck_ttp = {}
+    for i in files_aoi:
+        for file in i:
+            if "C2HR" in file:
+                files_AOI.append(file)
+                
+    for i in files_ttp:
+        for file in i:
+            if "C2HR" in file:
+                files_TTP.append(file)
+         
+    for file in files_AOI:
+        ti_m = os.path.getmtime(file)   
+        if str(last_modify_time_df['Last_Modify'].max()) == 'nan':
+            unprocess.append([file, ti_m])
+            if ti_m > max_time[0]:
+                max_time[0] = ti_m
+        
+        else:
+            if ti_m > last_modify_time:
+                unprocess.append([file, ti_m])
+                if ti_m > max_time[0]:
+                    max_time[0] = ti_m
+            else:
+                pass
+
+    for file in files_TTP:
+        ti_m = os.path.getmtime(file)
+        if str(last_modify_time_df['Last_Modify'].max()) == 'nan':
+            unprocess_ttp.append([file, ti_m])
+            if ti_m > max_time[0]:
+                max_time[0] = ti_m
+        
+        else:
+            if ti_m > last_modify_time :
+                unprocess_ttp.append([file, ti_m])  
+                if ti_m > max_time[0]:
+                    max_time[0] = ti_m
+            else:
+                pass
+    last_modify_time_df['Last_Modify'] = max_time
+    last_modify_time_df.to_csv('time.csv', index=False)
+    
+    print("unprocess: ", unprocess)
+    print("unprocess_ttp: ", unprocess_ttp)
+    # defect filter
+    mail_str_list = []
+    mail_csv_list = []
+    mail_plot_list = []
+    
+    if len(unprocess) <1:
+        pass
+    
+    else:
+        for data in unprocess:
+            
+            df = pd.read_csv(data[0] , skiprows=9, names=column_spec[~column_spec['AOI_EDC'].isna()]['AOI_EDC'].tolist())
+            basic_data_df = get_basic_data(data[0])
+            sheet_id = basic_data_df['SHEET_ID'].tolist()[0]
+            
+            for i in unprocess_ttp:
+
+                if sheet_id in i[0]:
+
+                    df_ttp = pd.read_csv(i[0] , skiprows=9, names=column_spec[~column_spec['TTP_EDC'].isna()]['TTP_EDC'].tolist())
+    
+            print('df_ttp shape: ', df_ttp.shape[0])
+            for i in ['R', 'G', 'B']:
+                tmp_df = df[df['LED_TYPE']==i]
+                tmp_df_ttp = df_ttp[df_ttp['LED_TYPE']==i]
+                values = tmp_df['Defect Reciepe'].value_counts(dropna=False).keys().tolist()
+                counts = tmp_df['Defect Reciepe'].value_counts(dropna=False).tolist()
+                value_dict = dict(zip(values, counts))
+                
+                
+                last_modify_time = data[1]
+
+                data_list = basic_data_df.loc[0].tolist()
+                data_list.append(i)
+                
+                Status = 'OK'
+                for i in spec_threshold.keys():
+                    
+                    if i == 'ttp':
+                        if any(num >= 6  for num in list(tmp_df_ttp.loc[(tmp_df_ttp['Shift X'] <= 10000.0)]['Shift X'])) or any(num <= -6  for num in list(tmp_df_ttp.loc[(tmp_df_ttp['Shift Y'] <= 10000.0)]['Shift Y'])):
+                            Status = 'NG'
+                            data_list.append(1)
+                        else:
+                            data_list.append(0)                    
+                        
+                        
+                        aoi_ttp_list = tmp_df.shape[0] * [0]
+                        Shift_X = tmp_df['Shift X'].tolist()
+                        Shift_Y = tmp_df['Shift Y'].tolist()
+                        total = []
+                        total = total + find_indices(Shift_X, lambda e: e > 6 and e<999999999.0)
+                        total = total + find_indices(Shift_Y, lambda e: e > 6 and e<999999999.0)
+                        total = total + find_indices(Shift_X, lambda e: e < -6 and e<999999999.0)
+                        total = total + find_indices(Shift_Y, lambda e: e < -6 and e<999999999.0)
+                        total = list(set(total))
+                        for i in total:
+                            aoi_ttp_list[i] = 1
+                        data_list.append(sum(aoi_ttp_list))
+                        break
+
+                    try:
+                        if value_dict[i] >= spec_threshold[i][1]:
+                            Status = 'NG'
+                            data_list.append(value_dict[i])
+
+                        else:
+                            data_list.append(value_dict[i])
+
+                    except Exception:
+                        data_list.append(0)
+
+                    
+                data_list.append(last_modify_time)
+                data_list.append(Status)
+                print("data_list: ", data_list)
+                print('defect_record: ', defect_record.columns)
+                defect_record.loc[len(defect_record)] = data_list
+                
+                
+                
+        cnt = 0
+        reason_list = []
+        for i in defect_record['STATUS'].tolist():
+            defect_reason_str = ''
+            if i == 'OK':
+                reason_list.append('nan')
+            else:
+
+                if defect_record['Tilt_num'].tolist()[cnt] >= 30:
+                    defect_reason_str = defect_reason_str + 'tilt '
+                if defect_record['Crack_num'].tolist()[cnt] >= 10:
+                    defect_reason_str = defect_reason_str + 'crack '
+                if defect_record['Loss_num'].tolist()[cnt] >= 25:
+                    defect_reason_str = defect_reason_str + 'loss'
+                if defect_record['TTP_ttp'].tolist()[cnt] == 1:
+                    defect_reason_str = defect_reason_str + 'ttp'
+                reason_list.append(defect_reason_str)
+            cnt+=1
+        defect_record['reason'] = reason_list
+        
+        current_time = datetime.datetime.now()
+        time_text = str(current_time.year) + '_' + str(current_time.month) + '_' + str(current_time.day)
+        last_time_text = str(current_time.year) + '_' + str(current_time.month) + '_' + str(current_time.day-1)
+        defect_record.to_csv(time_text + '_' + 'report.csv', index=False)
+        # mail_csv_list.append(time_text + '_' + 'report.csv')
+                
+        
+        # get ng cnt
+        total_ng_cnt = 0
+        total_tilt_cnt = 0
+        total_crack_cnt = 0
+        total_loss_cnt = 0
+        total_ttp_cnt = 0
+        total_cnt = defect_record.shape[0]/3
+        total_r_cnt = defect_record[defect_record['LED_TYPE']=='R'].shape[0]
+        total_g_cnt = defect_record[defect_record['LED_TYPE']=='G'].shape[0]
+        total_b_cnt = defect_record[defect_record['LED_TYPE']=='B'].shape[0]
+        r_ng_cnt = defect_record[defect_record['STATUS']=='NG']['LED_TYPE'].tolist().count('R')
+        g_ng_cnt = defect_record[defect_record['STATUS']=='NG']['LED_TYPE'].tolist().count('G')
+        b_ng_cnt = defect_record[defect_record['STATUS']=='NG']['LED_TYPE'].tolist().count('B')
+
+        for i in list(set(list(defect_record['SHEET_ID']))):
+            if 'NG' in defect_record[defect_record['SHEET_ID']==i]['STATUS'].tolist():
+        #         print(i)
+                total_ng_cnt+=1
+            tmp_total_tilt_cnt = 0
+            tmp_total_crack_cnt = 0
+            tmp_total_loss_cnt = 0
+            tmp_total_ttp_cnt = 0
+            for i in defect_record[defect_record['SHEET_ID']==i]['reason'].tolist():
+                if "tilt" in i :
+                    tmp_total_tilt_cnt = 1
+                if "crack" in i :
+                    tmp_total_crack_cnt = 1
+                if "loss" in i :
+                    tmp_total_loss_cnt = 1
+                if "    " in i :
+                    tmp_total_ttp_cnt = 1
+                
+            total_tilt_cnt+=tmp_total_tilt_cnt
+            total_crack_cnt+=tmp_total_crack_cnt
+            total_loss_cnt+=tmp_total_loss_cnt
+            total_ttp_cnt+=tmp_total_ttp_cnt
+            
+            
+            
+        total_yield = "{:.2%}".format(total_ng_cnt/total_cnt)
+        r_yield = "{:.2%}".format(r_ng_cnt/total_r_cnt)
+        g_yield = "{:.2%}".format(g_ng_cnt/total_g_cnt) 
+        b_yield = "{:.2%}".format(b_ng_cnt/total_b_cnt)
+        
+        
+        
+        # d = {'TOTAL':[overall_tilt, overall_crack, overall_loss, overall_ttp], 'R': [r_tilt, r_crack, r_loss, r_ttp], 'G': [g_tilt, g_crack, g_loss, g_ttp], 'B': [b_tilt, b_crack, b_loss, g_ttp]}
+        d = {'TOTAL':[total_cnt, total_ng_cnt, total_tilt_cnt, total_crack_cnt, total_loss_cnt, total_ttp_cnt], 'Yield': [total_yield, "", "", "", "", ""]}
+        summary_df = pd.DataFrame(data=d, index=['Total_Input', 'Total_NG', 'Tilt<=30', 'Crack<=10', 'Loss<=25', "TTP"])
+        plt.figure('123', figsize=(8,4))            # 視窗名稱
+        ax = plt.axes(frame_on=False)# 不要額外框線
+        ax.xaxis.set_visible(False)  # 隱藏X軸刻度線
+        ax.yaxis.set_visible(False)  # 隱藏Y軸刻度線
+
+        pd.plotting.table(ax, summary_df, loc='center') #將mytable投射到ax上，且放置於ax的中間
+        plt.savefig('summary_{}.png'.format(time_text))
+        mail_str_list.append('total summary rgb seprate')
+        mail_plot_list.append('summary_{}.png'.format(time_text)) 
+        
+        d = {'input':total_cnt, 'Total_Yield': total_yield, 'R_Yield': r_yield, 'G_Yield': g_yield, 'B_Yield': b_yield}
+        mail_df = pd.DataFrame(data=d, index=['Date:{} ~ {}'.format(last_time_text, time_text)])
+        mail_df = mail_df.T
+        plt.figure('1234', figsize=(8,4))            # 視窗名稱
+        ax = plt.axes(frame_on=False)# 不要額外框線
+        ax.xaxis.set_visible(False)  # 隱藏X軸刻度線
+        ax.yaxis.set_visible(False)  # 隱藏Y軸刻度線
+
+        pd.plotting.table(ax, mail_df, loc='center') #將mytable投射到ax上，且放置於ax的中間
+        plt.savefig('table_{}.png'.format(time_text))
+        mail_str_list.append('total yield rgb seprate')
+        mail_plot_list.append('table_{}.png'.format(time_text))  
+
+
+
+
+        # by sheet 計算
+        defect_record['ck'] = defect_record['SHEET_ID'] + defect_record['TIMESTAMP'].astype(str)
+        defect_record['MODEL_NO'] = defect_record['MODEL_NO'].replace(np.nan, 'no_model')
+        model_list = list(set(defect_record["MODEL_NO"].tolist()))
+        model_list.append('sheet')
+
+
+        for model in model_list:
+            model = str(model)
+            if model != 'sheet':
+                test_df = defect_record[defect_record["MODEL_NO"] == model]
+            else:
+                test_df = defect_record.copy()
+                print('sheet model!!!')
+            TOOL_ID = []
+            MES_ID = []
+            SHEET_ID = []
+            MODEL_NO = []
+            ABBR_NO = []
+            TIMESTAMP = []
+            PRODUCT_TYPE = []
+            Tilt_num = []
+            Crack_num = []
+            Loss_num = []
+            TTP = []
+            Last_Modify = []
+            STATUS = []
+            reason = []
+            reason_sum = []
+
+            for ck_ in list(set(test_df['ck'].tolist())):
+                tmp_df = test_df[test_df['ck']==ck_]
+
+                # fixed
+                TOOL_ID.append(tmp_df['TOOL_ID'].tolist()[0])
+                MODEL_NO.append(tmp_df['MODEL_NO'].tolist()[0])
+                ABBR_NO.append(tmp_df['ABBR_NO'].tolist()[0])
+                SHEET_ID.append(tmp_df['SHEET_ID'].tolist()[0])
+                TIMESTAMP.append(tmp_df['TIMESTAMP'].tolist()[0])
+                PRODUCT_TYPE.append(tmp_df['PRODUCT_TYPE'].tolist()[0])
+                MES_ID.append(tmp_df['MES_ID'].tolist()[0])
+                Last_Modify.append(tmp_df['Last_Modify'].tolist()[0])
+
+                # summary
+                Tilt_num.append(sum(tmp_df['Tilt_num'].tolist()))
+                Crack_num.append(sum(tmp_df['Crack_num'].tolist()))
+                Loss_num.append(sum(tmp_df['Loss_num'].tolist()))
+                TTP.append(sum(tmp_df['TTP_ttp'].tolist()))
+
+                # outcome
+                reason_str = ""
+                for i in tmp_df['reason'].tolist():
+                    reason_str = reason_str + str(i)
+                reason_sum.append(reason_str)
+                
+            for i in reason_sum:
+                defect_reason_str = ""
+                if 'tilt' in i:
+                    defect_reason_str = defect_reason_str + 'tilt '
+                if 'crack' in i:
+                    defect_reason_str = defect_reason_str + 'crack '
+                if 'loss' in i:
+                    defect_reason_str = defect_reason_str + 'loss'
+                if 'ttp' in i:
+                    defect_reason_str = defect_reason_str + 'ttp'
+
+                if defect_reason_str == "":
+                    STATUS.append("OK")
+                else:
+                    STATUS.append("NG")
+                reason.append(defect_reason_str)
+                
+                
+            d = {'TOOL_ID':TOOL_ID, 'MES_ID': MES_ID, 'SHEET_ID': SHEET_ID, 
+                'MODEL_NO': MODEL_NO, 'ABBR_NO': ABBR_NO, 'TIMESTAMP': TIMESTAMP,
+                'PRODUCT_TYPE': PRODUCT_TYPE, 'Tilt_num': Tilt_num,
+                'Crack_num': Crack_num, 'Loss_num': Loss_num, 'TTP': TTP,
+                'Last_Modify': Last_Modify, 'STATUS': STATUS, 'reason': reason}
+
+            df_sheet_only = pd.DataFrame(data=d)
+            df_sheet_only.to_csv(time_text + "_" + model + '_' + 'report.csv', index=False)
+            if model == 'sheet':
+                print('name: ', time_text + "_" + model + '_' + 'report.csv')
+                mail_csv_list.append(time_text + "_" + model + '_' + 'report.csv')
+
+
+            # get ng cnt
+            total_ng_cnt = 0
+            total_tilt_cnt = 0
+            total_crack_cnt = 0
+            total_loss_cnt = 0
+            total_ttp_cnt = 0
+            total_cnt = df_sheet_only.shape[0]
+
+            for i in list(set(list(df_sheet_only['SHEET_ID']))):
+                if 'NG' in df_sheet_only[df_sheet_only['SHEET_ID']==i]['STATUS'].tolist():
+            #         print(i)
+                    total_ng_cnt+=1
+                tmp_total_tilt_cnt = 0
+                tmp_total_crack_cnt = 0
+                tmp_total_loss_cnt = 0
+                tmp_total_ttp_cnt = 0
+                for i in df_sheet_only[df_sheet_only['SHEET_ID']==i]['reason'].tolist():
+                    if "tilt" in i :
+                        tmp_total_tilt_cnt = 1
+                    if "crack" in i :
+                        tmp_total_crack_cnt = 1
+                    if "loss" in i :
+                        tmp_total_loss_cnt = 1
+                    if "ttp" in i :
+                        tmp_total_ttp_cnt = 1
+
+                total_tilt_cnt+=tmp_total_tilt_cnt
+                total_crack_cnt+=tmp_total_crack_cnt
+                total_loss_cnt+=tmp_total_loss_cnt
+                total_ttp_cnt+=tmp_total_ttp_cnt
+
+
+            print('model: ', model)
+            print('total_ng_cnt: ', total_ng_cnt)
+            print("total_cnt: ", total_cnt)
+            total_yield = "{:.2%}".format((total_cnt - total_ng_cnt)/total_cnt)
+
+            d = {'TOTAL':[total_cnt, total_ng_cnt, total_tilt_cnt, total_crack_cnt, total_loss_cnt, total_ttp_cnt], 'Yield': [total_yield, "", "", "", "", ""]}
+            summary_df = pd.DataFrame(data=d, index=['Total_Input', 'Total_NG', 'Tilt<=30', 'Crack<=10', 'Loss<=25', "TTP"])
+            plt.figure('123', figsize=(8,4))            # 視窗名稱
+            ax = plt.axes(frame_on=False)# 不要額外框線
+            ax.xaxis.set_visible(False)  # 隱藏X軸刻度線
+            ax.yaxis.set_visible(False)  # 隱藏Y軸刻度線
+
+            pd.plotting.table(ax, summary_df, loc='center') #將mytable投射到ax上，且放置於ax的中間
+            plt.savefig('summary_{}_{}.png'.format(model, time_text))
+            
+            mail_str_list.append('model: {} summary'.format(model))
+            mail_plot_list.append('summary_{}_{}.png'.format(model, time_text))  
+
+
+
+
+        
+        
+        # 連到放圖片的 server
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect("ltaiw01", 22, "wma", "wma")
+        sftp_client = ssh.open_sftp()
+        
+        mail_picture_string = ''
+        cnt = 0
+        for plot in mail_plot_list:
+            sftp_client.put(localpath=plot, remotepath=f"/app_1/wma/deploy/download/mail_image/{plot}")
+
+            html_AOI_chart = '<br><br>' + mail_str_list[cnt] + '<br><br>' + f'<img src="http://ltaiw01:8081/download/mail_image/{plot}"  width="400" height="300">'
+
+            mail_picture_string = mail_picture_string + html_AOI_chart + '<br><br>'
+            
+            cnt+=1
+        
+                
+            
+    # for k in range(5):
+    #     exec(f'cat_{k} = k*2')
+
+
+        # attach mutiple file
+        attach_file_str = ''
+        cnt = 0
+        a = {}
+        for attach_file in mail_csv_list:
+            mail_df = pd.read_csv(attach_file)
+            encoded_string = base64.b64encode(mail_df.to_csv(index=False).encode())
+            
+            a[f"data_string_{cnt}"] = encoded_string.decode('utf-8')
+            
+            # exec(f"data_string_{cnt} = {encoded_string.decode('utf-8')}")
+            # data_string = encoded_string.decode('utf-8')
+            # globals()[f"data_string_{cnt}"] = encoded_string.decode('utf-8')
+            
+            
+            attach_str = str(attach_file) + ':' + str(a[f"data_string_{cnt}"])
+            
+            # attach_file_str = attach_file_str + attach_str + ', '
+            attach_file_str = attach_str + ', '
+            
+            cnt+=1
+            
+        attach_file_str = attach_file_str[:-1]
+
+        print("attach_file_str: ", attach_file_str)
+        # send mail
+        print('send mail!!') 
+        client = zeep.Client("http://ids.cdn.corpnet.auo.com/IDS_WS/Mail.asmx?wsdl") #連結IDS
+        # Rmail_user = ['Webb.Chu@auo.com'+ "," + 'Doran.Wu@auo.com' + "," + 'Wave.Liu@auo.com']
+        # Cmail_user = ['barry.shih@auo.com'+ "," + 'Mounter.Chen@auo.com'+ "," + 'HungDe.Chen@auo.com']  
+        
+        Rmail_user = ['Webb.Chu@auo.com']
+        Cmail_user = ['barry.shih@auo.com', 'HungDe.Chen@auo.com']  
+        
+        #測試用
+        # Rmail_user = ['barry.shih@auo.com']ㄈ
+        # Cmail_user = ['barry.shih@auo.com']      
+        
+
+        ManualSend_01 = {
+        'strMailCode': 'OOt4AZp0pAo=', #MailCode
+        'strRecipients':'' + Rmail_user[0] + '', #spec['function'][i]#收件人
+        'strCopyRecipients':'' + Cmail_user[0] + '', #副本
+        'strSubject':' COC2 daily report ', #標題
+        'strBody':'<b><font color="#E00000">' + 
+            'PLEASE CHECK THE ATTACH FILE TO SEE THE DETAIL!' + '<br><br>' +
+            mail_picture_string,
+            
+        'strFileBase64String': 
+            time_text + '_' + 'report.csv' + ':' + str(encoded_string.decode('utf-8')) #夾檔
+
+
+        # 'strFileBase64String': 
+        #     time_text + '_test' + 'report.csv' + ':' + str(encoded_string.decode('utf-8'))
+                        }
+
+        response_01 = client.service.ManualSend_39(**ManualSend_01)
+        print(response_01)
+
+
+if __name__ == '__main__':
+    # defect_filter()
+    schedule.every().day.at("07:20").do(defect_filter)
+    # schedule.every().day.at("18:20").do(defect_filter)
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(60) # wait one minute
