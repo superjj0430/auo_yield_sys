@@ -5,10 +5,18 @@ import numpy as np
 import pandas as pd
 import zeep
 import schedule
-import datetime
+from datetime import datetime, timedelta
 import base64
 import matplotlib.pyplot as plt
 import paramiko
+
+
+from bson.binary import Binary
+import pickle
+import gridfs
+from bson import ObjectId
+from pymongo import MongoClient
+import json
 
 def find_indices(lst, condition):
     return [i for i, elem in enumerate(lst) if condition(elem)]
@@ -39,7 +47,7 @@ def defect_filter():
     defect_record = pd.read_csv('defect_record.csv')
     column_spec = pd.read_csv('product_type.csv')
     last_modify_time_df = pd.read_csv('time.csv')
-    last_modify_time = last_modify_time_df['Last_Modify'].max()
+    # last_modify_time = last_modify_time_df['Last_Modify'].max()
     unprocess   = []
     unprocess_ttp = []
     mail_content = {}
@@ -47,8 +55,8 @@ def defect_filter():
     files_ttp = []
     
     # get new file
-    max_time = [last_modify_time]
-    
+    max_time = [datetime.timestamp(datetime.now())]
+    last_modify_time = datetime.timestamp(datetime.now()- timedelta(hours=1))
     for dir_path in dir_path_list:
         for (root, dirs, files) in os.walk(dir_path):
             files_aoi.append([dir_path + s for s in files if ('AOI_EDC' in s)])
@@ -98,8 +106,6 @@ def defect_filter():
                     max_time[0] = ti_m
             else:
                 pass
-    last_modify_time_df['Last_Modify'] = max_time
-    last_modify_time_df.to_csv('time.csv', index=False)
     
     print("unprocess: ", unprocess)
     print("unprocess_ttp: ", unprocess_ttp)
@@ -206,7 +212,7 @@ def defect_filter():
         current_time = datetime.datetime.now()
         time_text = str(current_time.year) + '_' + str(current_time.month) + '_' + str(current_time.day)
         last_time_text = str(current_time.year) + '_' + str(current_time.month) + '_' + str(current_time.day-1)
-        defect_record.to_csv(time_text + '_' + 'report.csv', index=False)
+        defect_record.to_csv('total_hour_report.csv', index=False)
         # mail_csv_list.append(time_text + '_' + 'report.csv')
                 
         
@@ -265,7 +271,7 @@ def defect_filter():
         ax.yaxis.set_visible(False)  # 隱藏Y軸刻度線
 
         pd.plotting.table(ax, summary_df, loc='center') #將mytable投射到ax上，且放置於ax的中間
-        plt.savefig('summary_{}.png'.format(time_text))
+        # plt.savefig('summary_{}.png'.format(time_text))
         mail_str_list.append('total summary rgb seprate')
         mail_plot_list.append('summary_{}.png'.format(time_text)) 
         
@@ -278,7 +284,7 @@ def defect_filter():
         ax.yaxis.set_visible(False)  # 隱藏Y軸刻度線
 
         pd.plotting.table(ax, mail_df, loc='center') #將mytable投射到ax上，且放置於ax的中間
-        plt.savefig('table_{}.png'.format(time_text))
+        # plt.savefig('table_{}.png'.format(time_text))
         mail_str_list.append('total yield rgb seprate')
         mail_plot_list.append('table_{}.png'.format(time_text))  
 
@@ -365,7 +371,7 @@ def defect_filter():
                 'Last_Modify': Last_Modify, 'STATUS': STATUS, 'reason': reason}
 
             df_sheet_only = pd.DataFrame(data=d)
-            df_sheet_only.to_csv(time_text + "_" + model + '_' + 'report.csv', index=False)
+            # df_sheet_only.to_csv(time_text + "_" + model + '_' + 'huour_report.csv', index=False)
             if model == 'sheet':
                 print('name: ', time_text + "_" + model + '_' + 'report.csv')
                 mail_csv_list.append(time_text + "_" + model + '_' + 'report.csv')
@@ -416,104 +422,24 @@ def defect_filter():
             ax.yaxis.set_visible(False)  # 隱藏Y軸刻度線
 
             pd.plotting.table(ax, summary_df, loc='center') #將mytable投射到ax上，且放置於ax的中間
-            plt.savefig('summary_{}_{}.png'.format(model, time_text))
+            # plt.savefig('summary_{}_{}.png'.format(model, time_text))
             
             mail_str_list.append('model: {} summary'.format(model))
             mail_plot_list.append('summary_{}_{}.png'.format(model, time_text))  
 
 
-
-
-        
-        
-        # 連到放圖片的 server
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect("ltaiw01", 22, "wma", "wma")
-        sftp_client = ssh.open_sftp()
-        
-        mail_picture_string = ''
-        cnt = 0
-        for plot in mail_plot_list:
-            sftp_client.put(localpath=plot, remotepath=f"/app_1/wma/deploy/download/mail_image/{plot}")
-
-            html_AOI_chart = '<br><br>' + mail_str_list[cnt] + '<br><br>' + f'<img src="http://ltaiw01:8081/download/mail_image/{plot}"  width="400" height="300">'
-
-            mail_picture_string = mail_picture_string + html_AOI_chart + '<br><br>'
-            
-            cnt+=1
-        
-                
-            
-    # for k in range(5):
-    #     exec(f'cat_{k} = k*2')
-
-
-        # attach mutiple file
-        attach_file_str = ''
-        cnt = 0
-        a = {}
-        for attach_file in mail_csv_list:
-            mail_df = pd.read_csv(attach_file)
-            encoded_string = base64.b64encode(mail_df.to_csv(index=False).encode())
-            
-            a[f"data_string_{cnt}"] = encoded_string.decode('utf-8')
-            
-            # exec(f"data_string_{cnt} = {encoded_string.decode('utf-8')}")
-            # data_string = encoded_string.decode('utf-8')
-            # globals()[f"data_string_{cnt}"] = encoded_string.decode('utf-8')
-            
-            
-            attach_str = str(attach_file) + ':' + str(a[f"data_string_{cnt}"])
-            
-            # attach_file_str = attach_file_str + attach_str + ', '
-            attach_file_str = attach_str + ', '
-            
-            cnt+=1
-            
-        attach_file_str = attach_file_str[:-1]
-
-        print("attach_file_str: ", attach_file_str)
-        # send mail
-        print('send mail!!') 
-        client = zeep.Client("http://ids.cdn.corpnet.auo.com/IDS_WS/Mail.asmx?wsdl") #連結IDS
-        # Rmail_user = ['Webb.Chu@auo.com'+ "," + 'Doran.Wu@auo.com' + "," + 'Wave.Liu@auo.com']
-        # Cmail_user = ['barry.shih@auo.com'+ "," + 'Mounter.Chen@auo.com'+ "," + 'HungDe.Chen@auo.com']  
-        
-        Rmail_user = ['Webb.Chu@auo.com']
-        Cmail_user = ['barry.shih@auo.com', 'HungDe.Chen@auo.com']  
-        
-        #測試用
-        # Rmail_user = ['barry.shih@auo.com']ㄈ
-        # Cmail_user = ['barry.shih@auo.com']      
-        
-
-        ManualSend_01 = {
-        'strMailCode': 'OOt4AZp0pAo=', #MailCode
-        'strRecipients':'' + Rmail_user[0] + '', #spec['function'][i]#收件人
-        'strCopyRecipients':'' + Cmail_user[0] + '', #副本
-        'strSubject':' COC2 daily report ', #標題
-        'strBody':'<b><font color="#E00000">' + 
-            'PLEASE CHECK THE ATTACH FILE TO SEE THE DETAIL!' + '<br><br>' +
-            mail_picture_string,
-            
-        'strFileBase64String': 
-            time_text + '_' + 'report.csv' + ':' + str(encoded_string.decode('utf-8')) #夾檔
-
-
-        # 'strFileBase64String': 
-        #     time_text + '_test' + 'report.csv' + ':' + str(encoded_string.decode('utf-8'))
-                        }
-
-        response_01 = client.service.ManualSend_39(**ManualSend_01)
-        print(response_01)
-
+    client = MongoClient('mongodb://wma:mamcb1@10.88.26.102:27017')
+    db = client["MT"]
+    collection = db["COC2_hour_SUMMARY"] 
+    df = pd.read_csv('total_hour_report.csv')
+    result = df.to_json(orient="records")
+    parsed = json.loads(result)  
+    collection.insert_many(parsed)
 
 if __name__ == '__main__':
-    # defect_filter()
-    schedule.every().day.at("07:20").do(defect_filter)
+    schedule.every(1).hours.at("07:00").do(defect_filter)
     # schedule.every().day.at("18:20").do(defect_filter)
     
     while True:
         schedule.run_pending()
-        time.sleep(60) # wait one minute
+        time.sleep(1) # wait one minute
