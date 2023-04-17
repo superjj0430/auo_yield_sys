@@ -1,0 +1,258 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# MongoDB Tutorial
+# ===============
+
+# ## Import module
+
+# In[25]:
+
+
+import pandas as pd
+import numpy as np
+from bson.binary import Binary
+import pickle
+import time
+import gridfs
+from bson import ObjectId
+from pymongo import MongoClient
+import json
+
+
+# ## 連接MongoDB
+# 
+# ***刪除 collection 的語法放在最後面，請勿使用 MT 內的 collection 做測試!***
+# 
+# 若為新建的 Database，只 run 到這行 ```db = client["TEST"]``` 是不會有東西的。
+# 
+# 會發現這時候用 ```client.list_database_names()``` 一樣會沒有新建的 Database。
+# 
+# **這是因為在 MongoDB 內，需要存入資料後，資料庫才會自動進行建置(包含 Database & collection)。**
+# 
+# 所以若想要看到是否有新建的 Database，只要先放入一筆資料，即可觀察到新建的 Database & collection。
+# 
+# 
+
+# # MT Database 僅供觀察MongoDB用，請勿用於測試。
+
+# In[26]:
+
+
+client = MongoClient('mongodb://wma:mamcb1@10.88.26.102:27017')
+
+# 印出現有的資料庫， SummaryTable 的資料都放在 MT 裡面
+print(client.list_database_names())
+
+# 選擇 Database
+db = client["MT"]
+
+# 選擇 collection
+collection = db["COC2_RGB_SUMMARY"] 
+
+# 印出現有的 collection, .chunk & .files 為 GridFS 自動生成的 collection。
+print(db.list_collection_names())
+
+
+# ## 將CSV寫入資料庫 
+# 
+# ***如果沒有 csv 檔，直接建一個 Dataframe 也可以。***
+# 
+# 由於 MongoDB 支援寫入的格式為 json 格式，所以需先將 Dataframe 轉成 json 的格式再寫入。
+# 當其存到 MongoDB 時，會再另外以 MongoDB 所支援的 Bson 格式作保存。
+
+# In[27]:
+
+
+df = pd.read_csv('2023_4_13_report.csv')
+
+result = df.to_json(orient="records")
+parsed = json.loads(result)  
+
+# ---將CSV檔案寫入---#
+collection.insert_many(parsed)
+
+
+# ## GridFS 用來儲存較大的矩陣資料
+
+# GridFS 會將大型的資料作分散式處理，**同時新增兩個 collection，分別為 .files & .chunks**，並以 **object_id** 的形式儲存。
+# 
+# 由於儲存時，需要將矩陣做序列化與反序列化，並轉將其轉成二進制文件的方式保存在MongoDB。
+# 
+# 若以二進制編碼會造成兩個問題:
+#     
+# > 1. **編碼問題(用latin-1編碼可解決，但會成程式碼易讀性很差)**
+#      ```
+#      pickle.loads(array.decode('latin-1').encode('latin-1'))
+#      ```
+# > 2. **會超過儲存16MB上限**
+# 
+# 主要是為了解決第二點，所以使用GridFS，但同時也能夠解決第一點的問題，因為所有的二進制編碼都會以 **object_id** 的形式被保存在MongoDB。
+# 
+# 如同開頭所提到的，當我們使用 GridFS，讀取矩陣時就不再需要做 decode 的動作。
+
+# In[4]:
+
+
+# db 為先前連接的 database 也就是 MT
+# collection 為 SummaryTable
+
+fs = gridfs.GridFS(db, collection='SummaryTable')
+
+
+# ## MongoDB 轉 pandas Dataframe
+# 
+# 這個部分也可以不轉成Dataframe的形式，但在python上面會比較難觀察資料，建議還是轉成dataframe的形式。
+
+# ### Query data
+# 
+# **collection.find** 能夠幫助我們更快地找到資料，當{}裡面是空，即代表查找所有資料。
+# 
+# * Ex: ```collection.find({})```
+# 
+# 加入條件時，需先輸入要查找的欄位，以及查詢的片號，同時也能夠進行多條件的查詢。
+# 以下為一個簡單的範例:
+# 
+# * Ex: ```collection.find({'SHEET_ID':'9697K6', 'Defect_Code':'AB09'})```
+# 
+# 
+# 如果是要依據時間查詢:
+# 
+# * Ex: ```collection.find({"CreateTime": {'$gt':202303030000,'$lt':202303100000},),```
+# 
+# 
+# 由於寫入時是字串格式，從 Dataframe 中依據時間取得資料時，依需求將要查詢的Column利用 **```.astype()```** 進行type的切換。
+
+# In[5]:
+
+
+cursor = collection.find({'SHEET_ID':'9697K6', 'Defect_Code':'AB09'})
+df = pd.DataFrame.from_records(cursor)
+df
+
+
+# ## 讀取存入的矩陣
+# 
+# 由於是使用 GridFS 放入 MongoDB，所以 2D array 欄位底下的值，都會是以 object_id (Object) 的方式儲存。
+# 
+# 將資料放入時會使用以下語法:
+# 
+# * **```fs.put(Binary(pickle.dumps(arr, protocol=5)))```**
+# 
+# **```pickle.dumps(arr, protocol=5) ```** 會將矩陣進行序列化，並將其轉成二進制編碼，```protocol=5``` 表示將轉換效率提升至最高。
+# 
+# 
+# ```Binary```則是為了要符合 MongoDB 內的格式預先做轉換再存入。
+# 
+# 若不加上 Binary 也可以，在 pyMongo 中，會自動轉換至 MongoDB 支援的格式。
+# 
+# 但在效率上，先透過 Binary 轉換會比自動轉換來的快一些。
+# 
+# 
+# 由於 MongoDB 的關係，會無法寫入 object 型態，所以 Dataframe 會先轉成 json 格式再以 string 的格式被寫入。
+# 
+# 第一次寫入:
+# 
+# > * **```result = whole_df.to_json(orient="records", default_handler=str)```**
+# 
+# 第二次寫入:
+# 
+# > * **```result = whole_df.to_json(orient="values", default_handler=str)```**
+# 
+# 
+# 
+# 讀取矩陣時，由於 object_id 是 **str** 的型態，需要透過 **```from bson import ObjectId```** 將字串轉換成 Object。
+# 
+# 再透過 **```fs.get().read()```** 取得二進制編碼檔案，最後則使用 **```pickle.loads```** 即可讀出矩陣。
+# 
+# 詳細步驟如下:
+# 
+#  ```test_arr = fs.put(Binary(pickle.dumps(arr, protocol=5)))```
+#  
+#  ```get_test_arr = fs.get(ObjectId(test_arr)).read()```
+#  
+#  ```get_test_arr = pickle.loads(get_test_arr)```
+
+# In[6]:
+
+
+# 取 light on 的 
+a = df.LightingCheck_2D.tolist()
+arrr = fs.get(ObjectId(a[0])).read()
+arrr2 = pickle.loads(arrr)
+arrr2
+
+
+# ## 刪除 collection
+# 
+# 
+# ***Notice!***
+# 
+# ***MT Database & SummaryTable collection目前皆正在運行中，若需要使用此語法進行測試，請另建 Database & collection 做測試!***
+# 
+# 刪除 collection 的語法請使用:
+# 
+# > ```db.drop_collection("collection_name")```
+# 
+# 提供下方的程式碼做為測試。
+# 
+
+# In[ ]:
+
+
+client = MongoClient('mongodb://wma:mamcb1@10.88.26.102:27017')
+
+database = "TEST"
+collection_name = "new_collection"
+# 印出現有的資料庫
+print(client.list_database_names())
+
+# 選擇 Database
+db = client[database]
+
+# 選擇 collection
+collection = db[collection_name] 
+
+
+# In[ ]:
+
+
+d = {'col1': [1, 2], 'col2': [3, 4]}
+df = pd.DataFrame(data=d)
+
+result = df.to_json(orient="records")
+parsed = json.loads(result) 
+
+#---將CSV檔案寫入---#
+collection.insert_many(parsed)
+
+print(f"Exist database: \n{client.list_database_names()}")
+print(f"The collction we have: \n{db.list_collection_names()}")
+
+
+# In[ ]:
+
+
+# 刪除 collection
+if collection_name in db.list_collection_names():
+    db.drop_collection("new_collection")
+    print("collection dropped")
+else:
+    print("collection not exist")
+
+
+# In[ ]:
+
+
+print("DB: ")
+print(f"After drop_collection: \n{client.list_database_names()}\n")
+
+print("Collection: ")
+print(f"After drop_collection: \n{db.list_collection_names()}")
+
+
+# In[ ]:
+
+
+
+
